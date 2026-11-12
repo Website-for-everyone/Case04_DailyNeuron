@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+
+<script>
+(function() {
+  const MOCK_DB = {"/api/news": {"count": 4, "news": [{"id": "deepseek-v3", "title": "DeepSeek-V3: 671B MoE с 37B активных параметров бросает вызов проприетарным моделям", "category": "LLM", "hype_score": 98, "source": "GitHub / DeepSeek-AI", "timestamp": "2026-11-12T08:00:00Z", "summary_10s": ["671B общих параметров при 37B активируемых на токен благодаря архитектуре Multi-head Latent Attention (MLA).", "Обучена всего за 2.788M H800 GPU-часов, стоимость тренировки составила менее $6M.", "Превзошла Llama 3.1 405B и приблизилась к Claude 3.5 Sonnet на математических и кодовых бенчмарках."], "technical_teardown": {"architecture": "DeepSeek Sparse MoE + Multi-Head Latent Attention (MLA)", "context_window": "128,000 токенов (Native YARN rotary scaling)", "benchmarks": {"MMLU": "88.5%", "HumanEval": "82.6%", "MATH-500": "90.2%"}, "quantization": "FP8 Mixed Precision Native Checkpoints", "vram_requirement": "8x H100 (80GB) для квантованного FP8 инференса без разгрузки в CPU"}}, {"id": "wan-2-1", "title": "Wan 2.1: Открытая диффузионная модель генерации 1080p видео с пространственно-временным VAE", "category": "Video Gen", "hype_score": 94, "source": "HuggingFace / Wan-Video", "timestamp": "2026-11-12T06:30:00Z", "summary_10s": ["Генерация фотореалистичного 1080p видео с кинематографической физикой и устойчивыми пальцами.", "Поддерживает как Text-to-Video, так и Image-to-Video на открытых весах 1.3B и 14B.", "Встроенная генерация аудиодорожки и пространственно-временной автоэнкодер (3D Causal VAE)."], "technical_teardown": {"architecture": "DiT (Diffusion Transformer) с 3D Spatio-Temporal Attention", "resolution": "До 1920x1080 при 24 FPS (до 5 секунд непрерывного движения)", "benchmarks": {"VBench": "84.3/100", "Temporal Consistency": "0.91"}, "quantization": "GGUF Q4_K_M для потребительских GPU", "vram_requirement": "12GB VRAM для модели 1.3B; 24GB VRAM для модели 14B в FP8"}}, {"id": "vllm-v07", "title": "vLLM v0.7: Нулевое копирование тензоров и PagedAttention V3 для серверного инференса", "category": "Open Source", "hype_score": 89, "source": "GitHub / vllm-project", "timestamp": "2026-11-11T22:15:00Z", "summary_10s": ["Прирост пропускной способности генерации токенов на 42% на кластерах H100.", "Полная нативная поддержка спекулятивного декодирования и квантования FP8/INT4 AWQ.", "Интеграция с Ray v2.30 для распределенного обслуживания моделей до 1T параметров."], "technical_teardown": {"architecture": "PagedAttention-3 с блочным кэшем в pinned memory", "speculative_decoding": "Medusa / Eagle heads без дополнительного процесса", "benchmarks": {"Throughput": "4,820 tok/sec на 8x A100", "TTFT (Latency)": "14ms"}, "quantization": "Marlin, GPTQ, AWQ, BitsAndBytes 4-bit", "vram_requirement": "Экономия до 35% видеопамяти под KV-кэш по сравнению с v0.6"}}, {"id": "smolagents", "title": "Smolagents от HuggingFace: Агенты на чистом Python коде вместо медленного JSON Tool Calling", "category": "Agents", "hype_score": 91, "source": "HuggingFace Hub", "timestamp": "2026-11-11T19:40:00Z", "summary_10s": ["Агенты пишут исполняемые сниппеты Python вместо громоздких структурированных JSON схем.", "Экономия контекстного окна до 70% и ускорение многошаговых рассуждений в 3 раза.", "Встроенная изоляция в WebAssembly и песочницах для защиты от случайного выполнения опасных команд."], "technical_teardown": {"architecture": "CodeAgent с AST-валидацией и REPL окружением", "token_efficiency": "3.2x меньше токенов на цепочку reasoning по сравнению с ReAct JSON", "benchmarks": {"GAIA Benchmark": "48.2% (1-е место среди легковесных фреймворков)"}, "sandbox": "Pyodide / E2B microVMs", "vram_requirement": "Работает локально с моделями от 3B (Llama 3.2 3B)"}}]}, "/api/ticker": {"ticker": ["🔥 DeepSeek-V3 достиг 88.5% на MMLU", "🎬 Wan 2.1 14B выложен на HuggingFace", "⚡️ vLLM v0.7 ускорил serving на 42%", "🤖 Smolagents обогнал ReAct на GAIA Benchmark"]}};
+  const STORAGE_KEY = "idrisov_demo_" + "Case04_DailyNeuron";
+  let localState = {};
+  try { localState = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); } catch(e) {}
+  function saveState() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(localState)); } catch(e) {} }
+
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async function(input, init) {
+    const urlStr = typeof input === "string" ? input : (input && input.url) || "";
+    if (!urlStr.includes("/api/")) {
+      return origFetch(input, init);
+    }
+
+    const method = ((init && init.method) || "GET").toUpperCase();
+    let body = {};
+    if (init && init.body && typeof init.body === "string") {
+      try { body = JSON.parse(init.body); } catch(e) {}
+    }
+
+    const pathOnly = urlStr.split("?")[0];
+    const urlPath = pathOnly.startsWith("http") ? new URL(pathOnly).pathname : pathOnly;
+
+    // 1. Exact GET match from extracted FastAPI TestClient data
+    if (method === "GET") {
+      if (MOCK_DB[urlStr]) return jsonResp(MOCK_DB[urlStr]);
+      if (MOCK_DB[urlPath]) return jsonResp(MOCK_DB[urlPath]);
+      for (const k of Object.keys(MOCK_DB)) {
+        if (k.split("?")[0] === urlPath) return jsonResp(MOCK_DB[k]);
+      }
+      if (urlPath.includes("/api/dataset/") && !MOCK_DB[urlPath]) {
+        const fallbackKey = Object.keys(MOCK_DB).find(k => k.startsWith("/api/dataset/"));
+        if (fallbackKey) return jsonResp(MOCK_DB[fallbackKey]);
+      }
+    }
+
+    // 2. Dynamic Calculators & Interactive Endpoints
+    if (urlPath.endsWith("/calculate")) {
+      const base = Number(body.base_price || body.area || body.days || 1) * 1500 || 4500;
+      const total = Math.max(2500, Math.round(base + (Number(body.weight_kg || 5) * 200)));
+      return jsonResp({
+        status: "ok",
+        total_price: total,
+        price_rub: total,
+        estimated_price: total,
+        duration_minutes: 90,
+        breakdown: { base: Math.round(total * 0.7), extras: Math.round(total * 0.3) },
+        currency: "RUB"
+      });
+    }
+
+    if (urlPath.includes("/estimate")) {
+      return jsonResp({
+        status: "ok",
+        total_rub: 3850000,
+        timeline_weeks: 8,
+        summary: "Смета сформирована (Static Demo Mode)",
+        estimate_id: "EST-" + Math.floor(1000 + Math.random() * 9000)
+      });
+    }
+
+    if (urlPath.includes("/query") || urlPath.includes("/historian/ask")) {
+      const q = body.question || body.query || body.prompt || "Анализ данных";
+      return jsonResp({
+        status: "ok",
+        answer: "Аналитический ответ (Demo AI): по запросу «" + q + "» выявлена устойчивая корреляция (r = 0.78, p < 0.01). Медианные значения находятся в пределах целевого диапазона без критических выбросов.",
+        metrics: [
+          { label: "Медиана", value: "42.8" },
+          { label: "Std Dev", value: "6.14" },
+          { label: "Выбросы", value: "2.1%" }
+        ]
+      });
+    }
+
+    if (urlPath.includes("/quiz/recommend")) {
+      return jsonResp({
+        status: "ok",
+        recommendation: {
+          name: "Ethiopia Yirgacheffe Kochere",
+          origin: "Ethiopia",
+          roast: "Light Filter",
+          notes: ["Бергамот", "Жасмин", "Персик"],
+          match_percent: 96
+        }
+      });
+    }
+
+    if (urlPath.includes("/verify-passcode")) {
+      return jsonResp({ status: "success", unlocked: true, valid: true, message: "VIP ACCESS GRANTED" });
+    }
+
+    if (urlPath.includes("/track-order")) {
+      return jsonResp({
+        status: "success",
+        order_id: urlPath.split("/").pop() || "CR-2026",
+        stage: "Регулировка хода и тест герметичности (Этап 4/5)",
+        master: "Виктор К.",
+        eta: "2 дня"
+      });
+    }
+
+    if (urlPath.includes("/tasks")) {
+      localState.tasks = localState.tasks || (MOCK_DB["/api/tasks"] && MOCK_DB["/api/tasks"].tasks) || [];
+      if (method === "POST" && urlPath.endsWith("/tasks")) {
+        const t = { id: Date.now(), title: body.title || "Новая задача", duration_hours: Number(body.duration_hours || 1), quadrant: body.quadrant || "urgent_important", is_completed: false };
+        localState.tasks.push(t);
+        saveState();
+        return jsonResp({ status: "ok", task: t, tasks: localState.tasks });
+      }
+      if (urlPath.includes("/toggle")) {
+        const id = Number(urlPath.split("/")[3]);
+        localState.tasks = localState.tasks.map(t => t.id === id ? { ...t, is_completed: !t.is_completed } : t);
+        saveState();
+        return jsonResp({ status: "ok", tasks: localState.tasks });
+      }
+      if (method === "DELETE") {
+        const id = Number(urlPath.split("/").pop());
+        localState.tasks = localState.tasks.filter(t => t.id !== id);
+        saveState();
+        return jsonResp({ status: "ok", tasks: localState.tasks });
+      }
+      return jsonResp({ tasks: localState.tasks });
+    }
+
+    if (urlPath === "/api/state") {
+      return jsonResp(MOCK_DB["/api/state"] || {
+        title: "LIVE RAP & TECH BATTLE // FINAL",
+        round: 3,
+        status: "VOTING_OPEN",
+        fighters: [
+          { id: "mc_a", name: "MC NEON", votes: 142, color: "#00f0ff" },
+          { id: "mc_b", name: "BYTE_KILLER", votes: 138, color: "#ff007f" }
+        ]
+      });
+    }
+
+    if (urlPath === "/api/vote") {
+      return jsonResp({ status: "ok", message: "Голос учтен!", voted: true });
+    }
+
+    // Default POST confirmation (bookings, orders, quotes, appraisals, seat reservations)
+    const refId = "ID-" + Math.floor(10000 + Math.random() * 90000);
+    return jsonResp({
+      status: "ok",
+      success: true,
+      id: refId,
+      booking_id: refId,
+      cert_id: refId,
+      voucher: "VIP-" + refId,
+      order_id: refId,
+      message: "Заявка #" + refId + " успешно оформлена и синхронизирована с Telegram-ботом @Idrisov_prod!"
+    });
+  };
+
+  function jsonResp(data) {
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+})();
+</script>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Neuron — Swiss Cyber-Editorial AI News</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-black: #0A0A0C;
+      --bg-carbon: #141418;
+      --border-grid: #26262E;
+      --paper-white: #F9F9FB;
+      --text-muted: #8E8E9E;
+      --neon-cyan: #00F0FF;
+      --acid-lime: #CCFF00;
+      --flame-orange: #FF5500;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Space Grotesk', sans-serif;
+    }
+
+    body {
+      background: var(--bg-black);
+      color: var(--paper-white);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Swiss Marquee Ticker */
+    .ticker-bar {
+      background: var(--neon-cyan);
+      color: #000000;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 0.8rem;
+      padding: 6px 0;
+      overflow: hidden;
+      white-space: nowrap;
+      display: flex;
+      border-bottom: 2px solid #000000;
+    }
+
+    .ticker-track {
+      display: inline-block;
+      animation: tickerScroll 20s linear infinite;
+    }
+
+    @keyframes tickerScroll {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    /* Top Masthead */
+    header {
+      border-bottom: 2px solid var(--border-grid);
+      padding: 30px 5%;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+
+    .masthead-title {
+      font-size: 3.6rem;
+      font-weight: 700;
+      letter-spacing: -2px;
+      line-height: 0.95;
+      text-transform: uppercase;
+    }
+
+    .masthead-title span {
+      color: var(--acid-lime);
+    }
+
+    .masthead-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+
+    /* Toolbar: Filters & Reading Mode Toggle */
+    .toolbar-bar {
+      border-bottom: 1px solid var(--border-grid);
+      background: var(--bg-carbon);
+      padding: 12px 5%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .category-pills {
+      display: flex;
+      gap: 8px;
+    }
+
+    .cat-btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border-grid);
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.15s ease;
+    }
+
+    .cat-btn:hover {
+      border-color: var(--neon-cyan);
+      color: var(--paper-white);
+    }
+
+    .cat-btn.active {
+      background: var(--paper-white);
+      color: var(--bg-black);
+      border-color: var(--paper-white);
+    }
+
+    /* Reading Mode Switcher */
+    .mode-switch-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+    }
+
+    .mode-toggle-group {
+      display: flex;
+      background: var(--bg-black);
+      border: 1px solid var(--border-grid);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .mode-btn {
+      padding: 8px 16px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 0.8rem;
+      transition: all 0.2s ease;
+    }
+
+    .mode-btn.active {
+      background: var(--neon-cyan);
+      color: #000000;
+    }
+
+    /* Main News Grid (Swiss Modular Structure) */
+    .news-grid {
+      max-width: 1400px;
+      margin: 40px auto;
+      padding: 0 5%;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 32px;
+      width: 100%;
+    }
+
+    .news-card {
+      background: var(--bg-carbon);
+      border: 1px solid var(--border-grid);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .news-card:hover {
+      border-color: var(--neon-cyan);
+      transform: translateY(-2px);
+    }
+
+    .card-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+    }
+
+    .cat-tag {
+      background: rgba(0, 240, 255, 0.1);
+      color: var(--neon-cyan);
+      padding: 4px 10px;
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      border-radius: 4px;
+      font-weight: 700;
+    }
+
+    .card-title {
+      font-size: 1.55rem;
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: -0.5px;
+      margin-bottom: 20px;
+    }
+
+    /* Hype-Meter Gauge */
+    .hype-container {
+      margin-bottom: 22px;
+    }
+
+    .hype-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .hype-track {
+      width: 100%;
+      height: 6px;
+      background: #202028;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .hype-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--neon-cyan), var(--acid-lime), var(--flame-orange));
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    /* Content Views */
+    .view-short ul {
+      list-style-type: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .view-short li {
+      font-size: 0.95rem;
+      line-height: 1.45;
+      position: relative;
+      padding-left: 20px;
+      color: #D1D1DE;
+    }
+
+    .view-short li::before {
+      content: "▪";
+      position: absolute;
+      left: 0;
+      color: var(--acid-lime);
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+
+    .view-tech {
+      background: #0E0E12;
+      border: 1px solid var(--border-grid);
+      padding: 16px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .tech-row {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px dashed #202028;
+      padding-bottom: 6px;
+    }
+
+    .tech-key { color: var(--text-muted); }
+    .tech-val { color: var(--neon-cyan); font-weight: 600; text-align: right; }
+
+    @media (max-width: 900px) {
+      .news-grid { grid-template-columns: 1fr; }
+      .masthead-title { font-size: 2.4rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Ticker Bar -->
+  <div class="ticker-bar">
+    <div class="ticker-track" id="tickerTrack">
+      BREAKING: DeepSeek-V3 671B Weights Open • Wan 2.1 14B Native Video Transformer Released • vLLM v0.7 Accelerates Token Generation 42% • Smolagents Code-Native Agents Top GAIA • Telegram Digest Scheduled for 09:00 AM • BREAKING: DeepSeek-V3 671B Weights Open • Wan 2.1 14B Native Video Transformer Released
+    </div>
+  </div>
+
+  <!-- Masthead -->
+  <header>
+    <div>
+      <h1 class="masthead-title">Daily <span>Neuron</span></h1>
+      <div class="masthead-sub">SWISS CYBER-EDITORIAL // AI DISPATCH // VOLUME 2026.11</div>
+    </div>
+    <div style="text-align: right;">
+      <a href="https://t.me/Idrisov_prod" target="_blank" style="color:var(--acid-lime); font-family:'JetBrains Mono'; text-decoration:none; font-size:0.9rem; font-weight:700;">
+        TELEGRAM: @Idrisov_prod
+      </a>
+      <div style="font-family:'JetBrains Mono'; font-size:0.75rem; color:var(--text-muted); margin-top:4px;">
+        AI CRAWLER: ACTIVE
+      </div>
+    </div>
+  </header>
+
+  <!-- Controls Toolbar -->
+  <section class="toolbar-bar">
+    <div class="category-pills" id="categoryFilter">
+      <button class="cat-btn active" data-cat="all">Все рубрики</button>
+      <button class="cat-btn" data-cat="llm">LLM</button>
+      <button class="cat-btn" data-cat="video gen">Video Gen</button>
+      <button class="cat-btn" data-cat="open source">Open Source</button>
+      <button class="cat-btn" data-cat="agents">Agents</button>
+    </div>
+
+    <!-- Reading Mode Switcher -->
+    <div class="mode-switch-container">
+      <span>ФОРМАТ ЧТЕНИЯ:</span>
+      <div class="mode-toggle-group">
+        <button class="mode-btn active" id="btnModeShort" onclick="setReadingMode('short')">⚡️ 10 Секунд</button>
+        <button class="mode-btn" id="btnModeTech" onclick="setReadingMode('tech')">🛠 Техразбор</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- News Grid Container -->
+  <main class="news-grid" id="newsGrid">
+    <!-- Rendered via JS -->
+  </main>
+
+  <script>
+    let activeMode = 'short'; // 'short' or 'tech'
+    let currentCategory = 'all';
+    let allNews = [];
+
+    async function loadNews() {
+      try {
+        const res = await fetch('/api/news');
+        const data = await res.json();
+        allNews = data.news;
+        renderNews();
+      } catch (err) {
+        console.error("Failed to fetch news:", err);
+      }
+    }
+
+    function renderNews() {
+      const grid = document.getElementById('newsGrid');
+      const filtered = currentCategory === 'all' 
+        ? allNews 
+        : allNews.filter(item => item.category.toLowerCase() === currentCategory.toLowerCase());
+
+      grid.innerHTML = filtered.map(item => {
+        // Render 10s bullets or Tech breakdown based on activeMode
+        let contentHtml = '';
+        if (activeMode === 'short') {
+          contentHtml = `
+            <div class="view-short">
+              <ul>
+                ${item.summary_10s.map(b => `<li>${b}</li>`).join('')}
+              </ul>
+            </div>
+          `;
+        } else {
+          const t = item.technical_teardown;
+          contentHtml = `
+            <div class="view-tech">
+              <div class="tech-row">
+                <span class="tech-key">Архитектура:</span>
+                <span class="tech-val">${t.architecture}</span>
+              </div>
+              ${t.context_window ? `
+              <div class="tech-row">
+                <span class="tech-key">Контекст:</span>
+                <span class="tech-val">${t.context_window}</span>
+              </div>` : ''}
+              ${t.quantization ? `
+              <div class="tech-row">
+                <span class="tech-key">Квантование:</span>
+                <span class="tech-val">${t.quantization}</span>
+              </div>` : ''}
+              <div class="tech-row">
+                <span class="tech-key">Память VRAM:</span>
+                <span class="tech-val">${t.vram_requirement}</span>
+              </div>
+            </div>
+          `;
+        }
+
+        return `
+          <article class="news-card">
+            <div>
+              <div class="card-meta">
+                <span class="cat-tag">${item.category}</span>
+                <span style="color:var(--text-muted)">${item.source}</span>
+              </div>
+
+              <h2 class="card-title">${item.title}</h2>
+
+              <div class="hype-container">
+                <div class="hype-label">
+                  <span>HYPE-METER</span>
+                  <span style="color:var(--acid-lime); font-weight:700;">${item.hype_score}% MOMENTUM</span>
+                </div>
+                <div class="hype-track">
+                  <div class="hype-fill" style="width: ${item.hype_score}%"></div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              ${contentHtml}
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+
+    function setReadingMode(mode) {
+      activeMode = mode;
+      document.getElementById('btnModeShort').classList.toggle('active', mode === 'short');
+      document.getElementById('btnModeTech').classList.toggle('active', mode === 'tech');
+      renderNews();
+    }
+
+    // Category Filter Listeners
+    const catButtons = document.querySelectorAll('.cat-btn');
+    catButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        catButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentCategory = btn.getAttribute('data-cat');
+        renderNews();
+      });
+    });
+
+    loadNews();
+  </script>
+</body>
+</html>
